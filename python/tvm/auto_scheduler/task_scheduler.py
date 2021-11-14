@@ -30,7 +30,7 @@ import logging
 import numpy as np
 
 from .search_policy import SearchPolicy, SketchPolicy, PreloadMeasuredStates
-from .cost_model import RandomModel, XGBModel
+from .cost_model import RandomModel, XGBModel, MLPModel
 from .utils import array_mean
 from .measure import ProgramMeasurer
 from .measure_record import RecordReader
@@ -48,6 +48,8 @@ def make_search_policies(
     load_model_file=None,
     load_log_file=None,
     adapative_training=False,
+    disable_cost_model_update=False,
+    few_shot_learning='base_only',
 ):
     """Make a list of search policies for a list of search tasks.
     It creates one policy per task.
@@ -85,11 +87,59 @@ def make_search_policies(
 
     if isinstance(search_policy, str):
         policy_type, model_type = search_policy.split(".")
-        if model_type == "xgb":
-            cost_model = XGBModel(
+        # if model_type == "xgb":
+        #     cost_model = XGBModel(
+        #         num_warmup_sample=len(tasks) * num_measures_per_round,
+        #         model_file=load_model_file,
+        #         adapative_training=adapative_training,
+        #     )
+        #     if load_model_file and os.path.isfile(load_model_file):
+        #         logger.info("TaskScheduler: Load pretrained model...")
+        #         cost_model.load(load_model_file)
+        #     elif load_log_file:
+        #         logger.info("TaskScheduler: Reload measured states and train the model...")
+        #         cost_model.update_from_file(load_log_file)
+        if model_type in ['xgb', 'xgb-no-update', 'mlp', 'mlp-no-update', 'tab', 'tab-no-update']:
+            if model_type == 'xgb-no-update' or model_type == 'mlp-no-update' or model_type == 'tab-no-update':
+                disable_cost_model_update = True
+            if model_type in ['xgb', 'xgb-no-update']:
+                cost_model = XGBModel(
+                    num_warmup_sample=len(tasks) * num_measures_per_round,
+                    disable_update=disable_cost_model_update,
+                    few_shot_learning=few_shot_learning,
+                    model_path=load_model_file,
+                )
+            elif model_type in ['tab', 'tab-no-update']:
+                cost_model = TabNetModel(
+                    disable_update=disable_cost_model_update,
+                    few_shot_learning=few_shot_learning
+                )
+            else:
+                cost_model = MLPModel(
+                    disable_update=disable_cost_model_update,
+                    few_shot_learning=few_shot_learning
+                )
+            if few_shot_learning == 'plus_mix_task' or few_shot_learning == 'plus_per_task':
+                # load base model
+                cost_model.load(load_model_file)
+                cost_model.model.few_shot_learning = few_shot_learning
+                dataset_file = 'tmp_dataset.pkl'
+                make_dataset_from_log_file([load_log_file], dataset_file, min_sample_size=1)
+                local_dataset = pickle.load(open(dataset_file, 'rb'))
+                cost_model.model.fit_local(local_dataset)
+            else:
+                if load_model_file and os.path.isfile(load_model_file):
+                    logger.info("TaskScheduler: Load pretrained model...")
+                    cost_model.load(load_model_file)
+                elif load_log_file:
+                    logger.info("TaskScheduler: Reload measured states and train the model...")
+                    cost_model.update_from_file(load_log_file)
+        elif model_type in ['lgbm', 'lgbm-no-update']:
+            if model_type == 'lgbm-no-update':
+                disable_cost_model_update = True
+            cost_model = LGBModel(
                 num_warmup_sample=len(tasks) * num_measures_per_round,
-                model_file=load_model_file,
-                adapative_training=adapative_training,
+                disable_update=disable_cost_model_update,
             )
             if load_model_file and os.path.isfile(load_model_file):
                 logger.info("TaskScheduler: Load pretrained model...")

@@ -19,3 +19,4 @@
 
 from .cost_model import RandomModel
 from .xgb_model import XGBModel
+from .mlp_model import MLPModel
