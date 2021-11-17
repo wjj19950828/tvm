@@ -308,6 +308,33 @@ def generate_ref_data_tflite(model):
     return input_data, expected_output_data
 
 
+def make_partitioned_function(relay_op):
+
+    ifm0 = relay.analysis.free_vars(relay_op)
+    ifm_shape = ifm0[0].type_annotation.shape
+
+    ifm = relay.var("ifm", shape=ifm_shape, dtype="int8")
+
+    glb_ethosu = relay.GlobalVar("tvmgen_default_ethosu_main_0")
+
+    func = (
+        relay.Function(ifm0, relay_op)
+        .with_attr("Inline", 1)
+        .with_attr("Compiler", "ethos-u")
+        .with_attr("global_symbol", "tvmgen_default_ethosu_main_0")
+        .with_attr("Primitive", 1)
+    )
+    mod = tvm.IRModule()
+    mod[glb_ethosu] = func
+    mod = relay.transform.InferType()(mod)
+
+    call = relay.Call(glb_ethosu, [ifm])
+    mod["main"] = relay.Function([ifm], call)
+    mod = relay.transform.InferType()(mod)
+
+    return mod
+
+
 def generate_weights_data(shape, dtype):
     size = 1
     for dim in shape:
@@ -388,6 +415,7 @@ def make_ethosu_conv2d(
     ofm_layout="NHWC",
     weight_dtype="int8",
     scale_bias_dtype="uint8",
+    rounding_mode="TFL",
 ):
     # conv params
     weight_shape = (ofm_channels, kernel_shape[0], kernel_shape[1], ifm_channels)
@@ -415,6 +443,7 @@ def make_ethosu_conv2d(
         activation=activation,
         clip_min=10 if activation == "CLIP" else 0,
         clip_max=100 if activation == "CLIP" else 0,
+        rounding_mode=rounding_mode,
         upscale="NONE",
         ifm_layout=ifm_layout,
         ofm_layout=ofm_layout,
@@ -434,6 +463,7 @@ def make_ethosu_depthwise_conv2d(
     ofm_layout="NHWC",
     weight_dtype="int8",
     scale_bias_dtype="uint8",
+    rounding_mode="TFL",
 ):
     # params
     weight_shape = (channels, kernel_shape[0], kernel_shape[1], 1)
@@ -461,6 +491,7 @@ def make_ethosu_depthwise_conv2d(
         activation=activation,
         clip_min=15 if activation == "CLIP" else 0,
         clip_max=105 if activation == "CLIP" else 0,
+        rounding_mode=rounding_mode,
         upscale="NONE",
         ifm_layout=ifm_layout,
         ofm_layout=ofm_layout,
@@ -493,6 +524,7 @@ def make_ethosu_pooling(
     activation="NONE",
     ifm_layout="NHWC",
     ofm_layout="NHWC",
+    rounding_mode="TFL",
 ):
     pooling = ethosu_ops.ethosu_pooling(
         ifm,
@@ -509,6 +541,7 @@ def make_ethosu_pooling(
         activation=activation,
         clip_min=10 if activation == "CLIP" else 0,
         clip_max=100 if activation == "CLIP" else 0,
+        rounding_mode=rounding_mode,
         upscale="NONE",
         ifm_layout=ifm_layout,
         ofm_layout=ofm_layout,
@@ -543,6 +576,7 @@ def make_ethosu_binary_elementwise(
     ifm_layout="NHWC",
     ifm2_layout="NHWC",
     ofm_layout="NHWC",
+    rounding_mode="TFL",
 ):
     ethosu_binary_elementwise = ethosu_ops.ethosu_binary_elementwise(
         ifm=ifm,
@@ -562,8 +596,30 @@ def make_ethosu_binary_elementwise(
         ofm_dtype=ofm_dtype,
         clip_min=10 if activation == "CLIP" else 0,
         clip_max=100 if activation == "CLIP" else 0,
+        rounding_mode=rounding_mode,
         ifm_layout=ifm_layout,
         ifm2_layout=ifm2_layout,
         ofm_layout=ofm_layout,
     )
     return ethosu_binary_elementwise
+
+
+def make_ethosu_identity(
+    ifm,
+    lut=relay.const([], dtype="int8"),
+    ifm_scale=1,
+    ifm_zero_point=0,
+    ofm_scale=1,
+    ofm_zero_point=0,
+    activation="NONE",
+):
+    identity = ethosu_ops.ethosu_identity(
+        ifm,
+        lut=lut,
+        ifm_scale=ifm_scale,
+        ifm_zero_point=ifm_zero_point,
+        ofm_scale=ofm_scale,
+        ofm_zero_point=ofm_zero_point,
+        activation=activation,
+    )
+    return identity
